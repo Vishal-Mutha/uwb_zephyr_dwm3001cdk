@@ -3,7 +3,7 @@
  * Copyright (c) 2015 - Decawave Ltd, Dublin, Ireland.
  * Copyright (c) 2021 - Home Smart Mesh
  * Copyright (c) 2022 - Sven Hoyer
- * 
+ *
  * This file is part of Zephyr-DWM1001.
  *
  *   Zephyr-DWM1001 is free software: you can redistribute it and/or modify
@@ -18,7 +18,7 @@
  *
  *   You should have received a copy of the GNU General Public License
  *   along with Zephyr-DWM1001.  If not, see <https://www.gnu.org/licenses/>.
- * 
+ *
  */
 #include "deca_device_api.h"
 
@@ -34,7 +34,7 @@
 
 LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
 
-#define APP_NAME "SIMPLE DS-TWR Responder EXAMPLE\n"
+#define APP_NAME "SIMPLE DS-TWR Responder EXAMPLE (ID configurable from 2-5)\n"
 
 /* Inter-ranging delay period, in milliseconds. */
 #define RNG_DELAY_MS 1000
@@ -61,7 +61,7 @@ static dwt_config_t config = {
 };
 
 uint8_t this_initiator_node_id  = 1;
-uint8_t responder_node_id       = 2;
+uint8_t responder_node_id       = 2;  // IMPORTANT: Change to 2, 3, 4, or 5 depending on which responder device this is
 
 
 #define POLL_RX_TO_RESP_TX_DLY_UUS_T 900
@@ -72,6 +72,7 @@ uint8_t responder_node_id       = 2;
 int main(void) {
 	printk(APP_NAME);
 	printk("==================\n");
+	printk("Responder ID: %d\n", responder_node_id);
 
     // INIT LED and let them Blink one Time to see Intitalion Finshed
     sit_led_init();
@@ -90,18 +91,22 @@ int main(void) {
     uint8_t frame_sequenz = 0;
 
 	while (1) {
-		sit_receive_now();
+		sit_receive_now(0,0);
         msg_simple_t rx_poll_msg;
 		msg_id_t msg_id = twr_1_poll;
 		if(sit_check_msg_id(msg_id, &rx_poll_msg)){
+            /* Only respond if the message is meant for this responder */
+            if(rx_poll_msg.header.dest != responder_node_id) {
+                continue;
+            }
 			uint64_t poll_rx_ts = get_rx_timestamp_u64();
-            
+
             uint32_t resp_tx_time = (poll_rx_ts + (POLL_RX_TO_RESP_TX_DLY_UUS_T * UUS_TO_DWT_TIME)) >> 8;
-            
+
             msg_simple_t msg_ds_poll_resp = {
                     ds_twr_2_resp,
                     rx_poll_msg.header.sequence,
-                    rx_poll_msg.header.dest,
+                    responder_node_id,  // Always use our configured responder ID
                     rx_poll_msg.header.source,
                     0
                 };
@@ -110,8 +115,8 @@ int main(void) {
             sit_set_preamble_detection_timeout(PRE_TIMEOUT);
             bool ret = sit_send_at_with_response((uint8_t*)&msg_ds_poll_resp, sizeof(msg_simple_t), resp_tx_time);
             if (ret == false) {
-                continue;
                 LOG_WRN("Something is wrong with Sending Poll Resp Msg");
+                continue;
             }
             msg_ds_twr_final_t rx_ds_final_msg;
 		    msg_id = ds_twr_3_final;
@@ -128,24 +133,15 @@ int main(void) {
                 resp_tx_ts_32 = (uint32_t) resp_tx_ts;
                 final_rx_ts_32 = (uint32_t) final_rx_ts;
 
-                double Ra, Rb, Da, Db;
-                int64_t tof_dtu;
-                Ra = (double)(resp_rx_ts - poll_tx_ts);
-                Rb = (double)(final_rx_ts_32 - resp_tx_ts_32);
-                Da = (double)(final_tx_ts - resp_rx_ts);
-                Db = (double)(resp_tx_ts_32 - poll_rx_ts_32);
-                tof_dtu = (int64_t)((Ra * Rb - Da * Db) / (Ra + Rb + Da + Db));
-
-                double tof = tof_dtu * DWT_TIME_UNITS;
-                double distance = tof * SPEED_OF_LIGHT;
-                LOG_INF("Distance: %lf", distance);
+                /* No distance calculation here - just send acknowledgment */
+                LOG_INF("Responder ID %d - Processed ranging with initiator", responder_node_id);
             } else {
-                LOG_WRN("Something is wrong with Final Msg Receive");
+                LOG_WRN("Responder %d - Something is wrong with Final Msg Receive", responder_node_id);
                 dwt_writesysstatuslo(SYS_STATUS_ALL_RX_TO | SYS_STATUS_ALL_RX_ERR);
             }
 
 		} else {
-			LOG_WRN("Something is wrong with Poll Msg Receive");
+			LOG_WRN("Responder %d - Something is wrong with Poll Msg Receive", responder_node_id);
             dwt_writesysstatuslo(SYS_STATUS_ALL_RX_TO | SYS_STATUS_ALL_RX_ERR);
 		}
 		frame_sequenz++;
