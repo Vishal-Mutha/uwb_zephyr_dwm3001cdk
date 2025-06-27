@@ -96,6 +96,7 @@ typedef enum {
     ss_twr_2_resp,
     ds_twr_2_resp, 
     ds_twr_3_final,
+	ds_twr_4_final,
     simple_poll,
     simple_resp,
     simple_final,
@@ -138,6 +139,14 @@ typedef struct {
     uint32_t final_tx_ts;
     uint16_t crc;
 } msg_ds_twr_final_t;
+
+typedef struct {
+    header_t header;
+    uint32_t poll_rx_ts;
+    uint32_t resp_tx_ts;
+    uint32_t final_rx_ts;
+    uint16_t crc;
+} msg_ds_twr_resp_t;
 
 typedef struct {
     header_t header;

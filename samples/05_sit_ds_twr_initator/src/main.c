@@ -1,21 +1,20 @@
 /*! ----------------------------------------------------------------------------
- *  @file    ds_twr_initiator.c
- *  @brief   Double-sided two-way ranging (DS TWR) initiator example code with multiple responders
+ *  @file    ss_twr_initiator.c
+ *  @brief   Single-sided two-way ranging (SS TWR) initiator example code
  *
- *           This is a simple code example which acts as the initiator in a DS TWR distance measurement exchange. This application sends a "poll"
+ *           This is a simple code example which acts as the initiator in a SS TWR distance measurement exchange. This application sends a "poll"
  *           frame (recording the TX time-stamp of the poll), after which it waits for a "response" message from the "DS TWR responder" example
- *           code (companion to this application) to complete the exchange. Then it sends a final message with the required timestamps.
- *           The application alternates between two responders (IDs 2 and 3) and calculates the distance to each responder.
- *           The distances to both responders are displayed on the terminal.
+ *           code (companion to this application) to complete the exchange. The response message contains the remote responder's time-stamps of poll
+ *           RX, and response TX. With this data and the local time-stamps, (of poll TX and response RX), this example application works out a value
+ *           for the time-of-flight over-the-air and, thus, the estimated distance between the two devices, which it writes to the LCD.
  *
  * @attention
  *
- * Copyright 2015 - 2023 (c) Decawave Ltd, Dublin, Ireland.
+ * Copyright 2015 - 2021 (c) Decawave Ltd, Dublin, Ireland.
  *
  * All rights reserved.
  *
  * @author Decawave
- * @author Modified for multiple responders
  */
 #include "deca_device_api.h"
 
@@ -31,14 +30,10 @@
 LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
 
 /* Example application name */
-#define APP_NAME "SIMPLE DS-TWR Initiator with Four Responders EXAMPLE\n"
+#define APP_NAME "SIMPLE DS-TWR Initiator EXAMPLE\n"
 
 uint8_t this_initiator_node_id  = 1;
-uint8_t responder_node_ids[4]   = {2, 3, 4, 5};  /* IDs of the four responder devices */
-uint8_t current_responder_idx   = 0;             /* Index to alternate between responders */
-
-/* Store distances for each responder */
-double distances[4] = {0.0, 0.0, 0.0, 0.0};
+uint8_t responder_node_id       = 2;
 
 /* Inter-ranging delay period, in milliseconds. */
 #define RNG_DELAY_MS 1000
@@ -64,12 +59,12 @@ double distances[4] = {0.0, 0.0, 0.0, 0.0};
 int main(void) {
 	printk(APP_NAME);
 	printk("==================\n");
-
+    
     // INIT LED and let them Blink one Time to see Intitalion Finshed
     sit_led_init();
 
 	int init_ok = sit_init();
-
+    
     if(init_ok < 0){
         sit_set_led(2, 0);
     } else {
@@ -77,13 +72,11 @@ int main(void) {
     }
     uint8_t frame_sequenz = 0;
 	while (1) {
-        // Select responder to communicate with
-        uint8_t responder_node_id = responder_node_ids[current_responder_idx];
-
+        
         sit_set_rx_tx_delay_and_rx_timeout(POLL_TX_TO_RESP_RX_DLY_UUS_T, RESP_RX_TIMEOUT_UUS_T);
         sit_set_preamble_detection_timeout(PRE_TIMEOUT);
 
-        msg_simple_t twr_poll = {twr_1_poll, frame_sequenz, this_initiator_node_id, responder_node_id, 0};
+        msg_simple_t twr_poll = {twr_1_poll, frame_sequenz, this_initiator_node_id , responder_node_id,0};
         sit_start_poll((uint8_t*) &twr_poll, (uint16_t)sizeof(twr_poll));
 
         msg_simple_t rx_resp_msg;
@@ -92,7 +85,7 @@ int main(void) {
         if(sit_check_msg_id(msg_id, &rx_resp_msg)) {
             uint64_t poll_tx_ts = get_tx_timestamp_u64();
 			uint64_t resp_rx_ts = get_rx_timestamp_u64();
-
+			
             uint32_t final_tx_time = (resp_rx_ts + (RESP_RX_TO_FINAL_TX_DLY_UUS_T * UUS_TO_DWT_TIME)) >> 8;
             uint64_t final_tx_ts = (((uint64_t)(final_tx_time & 0xFFFFFFFEUL)) << 8) + TX_ANT_DLY;
 
@@ -107,55 +100,50 @@ int main(void) {
                 0
             };
 
-            bool ret = sit_send_at((uint8_t*)&final_msg, sizeof(msg_ds_twr_final_t),final_tx_time);
+            bool ret = sit_send_at_with_response((uint8_t*)&final_msg, sizeof(msg_ds_twr_final_t),final_tx_time);
 
             if (ret == false) {
                 LOG_WRN("Something is wrong with Sending Final Msg");
                 continue;
             }
 
-            /* Calculate distance */
-            uint32_t poll_tx_ts_32 = (uint32_t)poll_tx_ts;
-            uint32_t resp_rx_ts_32 = (uint32_t)resp_rx_ts;
-            uint32_t final_tx_ts_32 = (uint32_t)final_tx_ts;
+			msg_ds_twr_resp_t rx_final_resp_msg;
+			msg_id = ds_twr_4_final;
+			if(sit_check_ds_resp_msg_id(msg_id, &rx_final_resp_msg)){
+				uint32_t poll_tx_ts, resp_rx_ts, final_tx_ts;
+				uint32_t poll_rx_ts_resp, resp_tx_ts_resp, final_rx_ts_resp;
 
-            /* Get poll receive and response transmit timestamps from responder */
-            uint32_t poll_rx_ts_32 = 0;  /* Will get from responder */
-            uint32_t resp_tx_ts_32 = 0;  /* Will get from responder */
+				poll_tx_ts = final_msg.poll_tx_ts;
+				resp_rx_ts = final_msg.resp_rx_ts;
+				final_tx_ts = final_msg.final_tx_ts;
 
-            /* Get responder index for storing distance */
-            int resp_idx = 0;
-            for (int i = 0; i < 4; i++) {
-                if (responder_node_id == responder_node_ids[i]) {
-                    resp_idx = i;
-                    break;
-                }
-            }
+				poll_rx_ts_resp = rx_final_resp_msg.poll_rx_ts;
+				resp_tx_ts_resp = rx_final_resp_msg.resp_tx_ts;
+				final_rx_ts_resp = rx_final_resp_msg.final_rx_ts;
 
-            /* For demo purposes, calculate a placeholder distance */
-            /* In real implementation, we would need to receive poll_rx_ts and resp_tx_ts from responder */
-            double tof = ((double)(resp_rx_ts_32 - poll_tx_ts_32)) * DWT_TIME_UNITS / 2;
-            distances[resp_idx] = tof * SPEED_OF_LIGHT;
+				double Ra, Rb, Da, Db;
+				int64_t tof_dtu;
+				Ra = (double)(resp_rx_ts - poll_tx_ts);
+				Rb = (double)(final_rx_ts_resp - resp_tx_ts_resp);
+				Da = (double)(final_tx_ts - resp_rx_ts);
+				Db = (double)(resp_tx_ts_resp - poll_rx_ts_resp);
+				tof_dtu = (int64_t)((Ra * Rb - Da * Db) / (Ra + Rb + Da + Db));
 
-            /* Display the distances from all four responders */
-            printk("Distances: [ID %d: %.2f m] [ID %d: %.2f m] [ID %d: %.2f m] [ID %d: %.2f m]\n",
-                   responder_node_ids[0], distances[0],
-                   responder_node_ids[1], distances[1],
-                   responder_node_ids[2], distances[2],
-                   responder_node_ids[3], distances[3]);
+				double tof = tof_dtu * DWT_TIME_UNITS;
+				double distance = tof * SPEED_OF_LIGHT;
+				LOG_INF("Distance: %lf", distance);
+			} else {
+				LOG_WRN("Something is wrong with Final Msg Receive");
+				dwt_writesysstatuslo(SYS_STATUS_ALL_RX_TO | SYS_STATUS_ALL_RX_ERR);
+			}
 
             frame_sequenz++;
 
 		} else {
-			LOG_WRN("Something is wrong with Receiving Msg from responder %d", responder_node_id);
+			LOG_WRN("Something is wrong with Receiving Msg");
             dwt_writesysstatuslo(SYS_STATUS_ALL_RX_TO | SYS_STATUS_ALL_RX_ERR);
 		}
-
-        /* Switch to the next responder for the next iteration */
-        current_responder_idx = (current_responder_idx + 1) % 4;
-
-        /* Add a small delay between ranging cycles */
-        k_msleep(50);
+        k_msleep(100);
 	}
     return 0;
 }

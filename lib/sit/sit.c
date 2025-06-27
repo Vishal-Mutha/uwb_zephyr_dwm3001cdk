@@ -267,11 +267,37 @@ void sit_dstwr_initiator() {
 					0
 				};
 
-				bool ret = sit_send_at((uint8_t*)&final_msg, sizeof(msg_ds_twr_final_t),final_tx_time);
+				bool ret = sit_send_at_with_response((uint8_t*)&final_msg, sizeof(msg_ds_twr_final_t),final_tx_time);
 
 				if (ret == false) {
 					LOG_WRN("Something is wrong with Sending Final Msg");
 					continue;
+				}
+
+				msg_ds_twr_resp_t rx_ds_resp_msg;
+				msg_id = ds_twr_4_final;
+				if(sit_check_ds_resp_msg_id(msg_id, &rx_ds_resp_msg) && rx_ds_resp_msg.header.dest == device_settings.deviceID){
+					uint32_t poll_rx_ts_32 = rx_ds_resp_msg.poll_rx_ts;
+					uint32_t resp_tx_ts_32 = rx_ds_resp_msg.resp_tx_ts;
+					uint32_t final_rx_ts_32 = rx_ds_resp_msg.final_rx_ts;
+
+					int64_t tof_dtu;
+					time_round_1 = (double)((uint32_t)resp_rx_ts - (uint32_t)poll_tx_ts);
+					time_round_2 = (double)(final_rx_ts_32 - resp_tx_ts_32);
+					time_reply_1 = (double)(resp_tx_ts_32 - poll_rx_ts_32);
+					time_reply_2 = (double)((uint32_t)final_tx_ts - (uint32_t)resp_rx_ts);
+					tof_dtu = (int64_t)((time_round_1 * time_round_2 - time_reply_1 * time_reply_2) 
+										/ (time_round_1 + time_round_2 + time_reply_1 + time_reply_2)
+									);
+
+					double tof = (double)tof_dtu * DWT_TIME_UNITS;
+					distance = tof * SPEED_OF_LIGHT;
+					LOG_INF("Distance: %lf", distance);
+					
+					send_twr_notify(device_settings.deviceID);
+				} else {
+					LOG_WRN("Something is wrong with Final Msg Receive");
+					dwt_writesysstatuslo(SYS_STATUS_ALL_RX_TO | SYS_STATUS_ALL_RX_ERR);
 				}
 			} else {
 				LOG_WRN("Something is wrong with Receiving Msg");
@@ -313,29 +339,23 @@ void sit_dstwr_responder() {
 				uint64_t resp_tx_ts = get_tx_timestamp_u64();
 				uint64_t final_rx_ts = get_rx_timestamp_u64();
 
-				uint32_t poll_tx_ts = rx_ds_final_msg.poll_tx_ts;
-				uint32_t resp_rx_ts = rx_ds_final_msg.resp_rx_ts;
-				uint32_t final_tx_ts = rx_ds_final_msg.final_tx_ts;
+				msg_ds_twr_resp_t final_resp_msg = {{
+					ds_twr_4_final,
+					rx_ds_final_msg.header.sequence,
+					rx_ds_final_msg.header.dest,
+					rx_ds_final_msg.header.source},
+					(uint32_t)poll_rx_ts,
+					(uint32_t)resp_tx_ts,
+					(uint32_t)final_rx_ts,
+					0
+				};
 
-				uint32_t poll_rx_ts_32, resp_tx_ts_32, final_rx_ts_32;
-				poll_rx_ts_32 = (uint32_t) poll_rx_ts;
-				resp_tx_ts_32 = (uint32_t) resp_tx_ts;
-				final_rx_ts_32 = (uint32_t) final_rx_ts;
+				ret = sit_send_at((uint8_t*)&final_resp_msg, sizeof(msg_ds_twr_resp_t),0);
 
-				int64_t tof_dtu;
-				time_round_1 = (double)(resp_rx_ts - poll_tx_ts);
-				time_round_2 = (double)(final_rx_ts_32 - resp_tx_ts_32);
-				time_reply_1 = (double)(resp_tx_ts_32 - poll_rx_ts_32);
-				time_reply_2 = (double)(final_tx_ts - resp_rx_ts);
-				tof_dtu = (int64_t)((time_round_1 * time_round_2 - time_reply_1 * time_reply_2) 
-										/ (time_round_1 + time_round_2 + time_reply_1 + time_reply_2)
-									);
-
-				double tof = (double)tof_dtu * DWT_TIME_UNITS;
-				distance = tof * SPEED_OF_LIGHT;
-				LOG_INF("Distance: %lf", distance);
-				
-				send_twr_notify(device_settings.deviceID);
+				if (ret == false) {
+					LOG_WRN("Something is wrong with Sending Final Resp Msg");
+					continue;
+				}
 			} else {
                 LOG_WRN("Something is wrong with Final Msg Receive");
                 dwt_writesysstatuslo(SYS_STATUS_ALL_RX_TO | SYS_STATUS_ALL_RX_ERR);
