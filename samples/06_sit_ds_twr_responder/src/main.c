@@ -34,35 +34,16 @@
 
 LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
 
-#define APP_NAME "SIMPLE DS-TWR Responder EXAMPLE\n"
+#define APP_NAME "DS-TWR RESPONDER EXAMPLE\n"
 
-/* Inter-ranging delay period, in milliseconds. */
-#define RNG_DELAY_MS 1000
+/* This is the responder's ID. */
+#define RESPONDER_ID 4
 
-/* Default antenna delay values for 64 MHz PRF. See NOTE 2 below. */
+/* Default antenna delay values for 64 MHz PRF. */
 #define TX_ANT_DLY 16385
 #define RX_ANT_DLY 16385
 
-/* Default communication configuration. We use default non-STS DW mode. */
-static dwt_config_t config = {
-    5,                /* Channel number. */
-    DWT_PLEN_4096,    /* Preamble length. Used in TX only. */
-    DWT_PAC32,        /* Preamble acquisition chunk size. Used in RX only. */
-    9,                /* TX preamble code. Used in TX only. */
-    9,                /* RX preamble code. Used in RX only. */
-    DWT_SFD_IEEE_4Z,  /* 0 to use standard 8 symbol SFD, 1 to use non-standard 8 symbol, 2 for non-standard 16 symbol SFD and 3 for 4z 8 symbol SDF type */
-    DWT_BR_850K,      /* Data rate. */
-    DWT_PHRMODE_STD,  /* PHY header mode. */
-    DWT_PHRRATE_STD,  /* PHY header rate. */
-    4073,             /* SFD timeout (preamble length + 1 + SFD length - PAC size). Used in RX only. */
-    DWT_STS_MODE_OFF, /* STS disabled */
-    DWT_STS_LEN_32,   /* STS length see allowed values in Enum dwt_sts_lengths_e */
-    DWT_PDOA_M0       /* PDOA mode off */
-};
-
-uint8_t this_initiator_node_id = 1;
-uint8_t responder_node_id = 2;
-
+/* DS-TWR delays */
 #define POLL_RX_TO_RESP_TX_DLY_UUS_T 900
 #define RESP_TX_TO_FINAL_RX_DLY_UUS_T 600
 #define FINAL_RX_TIMEOUT_T 1200
@@ -98,7 +79,7 @@ int main(void)
         sit_receive_now(0, 0);
         msg_simple_t rx_poll_msg;
         msg_id_t msg_id = twr_1_poll;
-        if (sit_check_msg_id(msg_id, &rx_poll_msg))
+        if (sit_check_msg_id(msg_id, &rx_poll_msg) && (rx_poll_msg.header.dest == RESPONDER_ID))
         {
             uint64_t poll_rx_ts = get_rx_timestamp_u64();
 
@@ -116,9 +97,10 @@ int main(void)
             bool ret = sit_send_at_with_response((uint8_t *)&msg_ds_poll_resp, sizeof(msg_simple_t), resp_tx_time);
             if (ret == false)
             {
+                LOG_WRN("Failed to send response to initiator");
                 continue;
-                LOG_WRN("Something is wrong with Sending Poll Resp Msg");
             }
+
             msg_ds_twr_final_t rx_ds_final_msg;
             msg_id = ds_twr_3_final;
             if (sit_check_ds_final_msg_id(msg_id, &rx_ds_final_msg))
@@ -140,23 +122,20 @@ int main(void)
                 ret = sit_send_at((uint8_t *)&final_resp_msg, sizeof(msg_ds_twr_resp_t), final_resp_tx_time);
                 if (ret == false)
                 {
-                    LOG_WRN("Something is wrong with Sending Final Resp Msg");
-                    continue;
+                    LOG_WRN("Failed to send final response to initiator");
                 }
             }
             else
             {
-                LOG_WRN("Something is wrong with Final Msg Receive");
+                LOG_WRN("Did not receive final message from initiator");
                 dwt_writesysstatuslo(SYS_STATUS_ALL_RX_TO | SYS_STATUS_ALL_RX_ERR);
             }
         }
         else
         {
-            LOG_WRN("Something is wrong with Poll Msg Receive");
-            dwt_writesysstatuslo(SYS_STATUS_ALL_RX_TO | SYS_STATUS_ALL_RX_ERR);
+            // Not our poll, just go back to listening
         }
         frame_sequenz++;
-        k_msleep(80);
     }
 
     return 0;
